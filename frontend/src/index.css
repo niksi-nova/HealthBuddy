@@ -1,0 +1,40 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-sand font-sans text-charcoal;
+  }
+}
+
+@layer components {
+  /* Glassmorphism Card */
+  .glass-card {
+    @apply bg-white/15 backdrop-blur-glass border border-white/30 shadow-glass;
+  }
+
+  /* Glass Input */
+  .glass-input {
+    @apply bg-white/20 backdrop-blur-glass border border-white/40 
+           focus:border-gold focus:ring-2 focus:ring-gold/30 
+           transition-all duration-300;
+  }
+
+  /* Floating Button */
+  .floating-btn {
+    @apply fixed bottom-8 right-8 w-16 h-16 rounded-full 
+           bg-gold text-white shadow-glow 
+           hover:shadow-glow-sage hover:scale-110 
+           transition-all duration-300 
+           flex items-center justify-center text-3xl font-bold;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-gradient-to-r from-sage to-terracotta bg-clip-text text-transparent;
+  }
+}

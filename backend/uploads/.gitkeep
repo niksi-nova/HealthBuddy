@@ -1,0 +1,3 @@
+# Uploads Directory
+This directory stores uploaded medical reports.
+Files are automatically placed here by the upload middleware.
