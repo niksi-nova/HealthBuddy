@@ -54,7 +54,7 @@ const Signup = () => {
             <GlassCard className="w-full max-w-md">
                 <div className="text-center mb-8">
                     <h1 className="text-4xl font-display font-bold text-gradient mb-2">
-                        Family Health
+                        Health Buddy
                     </h1>
                     <p className="text-charcoal/70">Create your account</p>
                 </div>

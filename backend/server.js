@@ -11,6 +11,7 @@ import authRoutes from './routes/auth.js';
 import familyRoutes from './routes/family.js';
 import recordsRoutes from './routes/records.js';
 import chatRoutes from './routes/chat.js';
+import medicalRoutes from './routes/medical.js';
 
 // Load environment variables
 dotenv.config();
@@ -59,6 +60,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/family', familyRoutes);
 app.use('/api/records', recordsRoutes);
 app.use('/api/chat', chatRoutes);
+app.use('/api/medical', medicalRoutes);
 
 // 404 handler
 app.use(notFound);

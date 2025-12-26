@@ -1,22 +1,25 @@
 import express from 'express';
 import { body, param, validationResult } from 'express-validator';
-import ChatHistory from '../models/ChatHistory.js';
 import FamilyMember from '../models/FamilyMember.js';
+import LabResult from '../models/LabResult.js';
 import { protect } from '../middleware/auth.js';
-import { queryWithRAG } from '../services/aiService.js';
+import geminiService from '../services/geminiService.js';
+import chromaService from '../services/chromaService.js';
 
 const router = express.Router();
 
 /**
- * @route   POST /api/chat/message
- * @desc    Send message to AI chatbot
+ * @route   POST /api/chat/:memberId
+ * @desc    Chat with medical AI assistant about member's health data
  * @access  Private
+ * @security Member-level access control, strict safety guardrails
  */
-router.post('/message',
+router.post('/:memberId',
     protect,
     [
-        body('familyMemberId').isMongoId().withMessage('Invalid family member ID'),
-        body('message').trim().isLength({ min: 1, max: 1000 }).withMessage('Message must be 1-1000 characters')
+        param('memberId').isMongoId().withMessage('Invalid member ID'),
+        body('message').trim().notEmpty().withMessage('Message is required')
+            .isLength({ max: 500 }).withMessage('Message too long (max 500 characters)')
     ],
     async (req, res, next) => {
         try {
@@ -29,137 +32,125 @@ router.post('/message',
                 });
             }
 
-            const { familyMemberId, message } = req.body;
+            const { memberId } = req.params;
+            const { message } = req.body;
 
-            // Verify family member belongs to user
-            const member = await FamilyMember.findOne({
-                _id: familyMemberId,
+            // SECURITY: Verify member belongs to user OR is the user themselves
+            let member = await FamilyMember.findOne({
+                _id: memberId,
                 userId: req.user._id
             });
 
+            // Allow admin to query their own data
+            if (!member && memberId === req.user._id.toString()) {
+                member = {
+                    _id: req.user._id,
+                    userId: req.user._id,
+                    name: req.user.name || 'Admin',
+                    age: req.user.age || 30,
+                    gender: req.user.gender || 'Not specified',
+                    existingConditions: []
+                };
+            }
+
             if (!member) {
-                return res.status(404).json({
+                return res.status(403).json({
                     success: false,
-                    message: 'Family member not found'
+                    message: 'Access denied'
                 });
             }
 
-            // Get or create chat history
-            let chatHistory = await ChatHistory.findOrCreate(familyMemberId, req.user._id);
+            // Get recent lab results (last 6 months)
+            const sixMonthsAgo = new Date();
+            sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
 
-            // Add user message
-            chatHistory.addMessage('user', message);
-            await chatHistory.save();
+            const labResults = await LabResult.find({
+                memberId: memberId,
+                testDate: { $gte: sixMonthsAgo }
+            })
+                .sort({ testDate: -1 })
+                .limit(50)
+                .lean();
 
-            // Query AI with RAG
-            const { answer, sources, confidence } = await queryWithRAG(message, familyMemberId);
+            // Query vector store for relevant report summaries
+            const reportSummaries = await chromaService.queryReports(
+                req.user._id.toString(),
+                message,
+                3 // Get top 3 relevant reports
+            );
 
-            // Add AI response
-            chatHistory.addMessage('assistant', answer, sources, confidence);
-            await chatHistory.save();
+            // Build context for Gemini
+            const context = {
+                labResults: labResults.map(r => ({
+                    marker: r.marker,
+                    value: r.value,
+                    unit: r.unit,
+                    testDate: r.testDate,
+                    isAbnormal: r.isAbnormal
+                })),
+                reportSummaries: reportSummaries.map(s => s.text),
+                memberInfo: {
+                    name: member.name,
+                    age: member.age,
+                    gender: member.gender,
+                    conditions: member.existingConditions || []
+                }
+            };
 
-            res.status(200).json({
+            // Generate response using Gemini with safety guardrails
+            const aiResponse = await geminiService.generateMedicalResponse(message, context);
+
+            // Log for audit
+            console.log(`[CHAT AUDIT] User: ${req.user._id}, Member: ${memberId}, Question: ${message.substring(0, 50)}...`);
+
+            res.json({
                 success: true,
-                reply: answer,
-                sources,
-                confidence,
-                timestamp: new Date()
+                response: aiResponse.response,
+                sources: reportSummaries.map(s => ({
+                    date: s.reportDate,
+                    member: s.memberName
+                })),
+                labDataCount: labResults.length,
+                model: aiResponse.model
             });
+
         } catch (error) {
+            console.error('Chat error:', error);
+
+            // Handle Gemini API errors gracefully
+            if (error.message.includes('API key')) {
+                return res.status(503).json({
+                    success: false,
+                    message: 'AI service is not configured. Please add OPENAI_API_KEY to your .env file.'
+                });
+            }
+
             next(error);
         }
     }
 );
 
 /**
- * @route   GET /api/chat/history/:memberId
- * @desc    Get chat history for a family member
- * @access  Private
+ * @route   GET /api/chat/example-questions
+ * @desc    Get example questions users can ask
+ * @access  Public
  */
-router.get('/history/:memberId',
-    protect,
-    [
-        param('memberId').isMongoId().withMessage('Invalid member ID')
-    ],
-    async (req, res, next) => {
-        try {
-            const errors = validationResult(req);
-            if (!errors.isEmpty()) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Validation failed',
-                    errors: errors.array()
-                });
-            }
+router.get('/example-questions', (req, res) => {
+    const examples = [
+        "What does my hemoglobin level mean?",
+        "Are any of my test results abnormal?",
+        "What is cholesterol and why does it matter?",
+        "How can I improve my blood sugar levels?",
+        "What foods should I eat for better iron levels?",
+        "Explain my complete blood count results",
+        "What lifestyle changes can help my health?",
+        "Should I be concerned about any of my results?"
+    ];
 
-            // Verify family member belongs to user
-            const member = await FamilyMember.findOne({
-                _id: req.params.memberId,
-                userId: req.user._id
-            });
-
-            if (!member) {
-                return res.status(404).json({
-                    success: false,
-                    message: 'Family member not found'
-                });
-            }
-
-            const chatHistory = await ChatHistory.findOne({
-                familyMemberId: req.params.memberId,
-                userId: req.user._id
-            });
-
-            res.status(200).json({
-                success: true,
-                messages: chatHistory ? chatHistory.messages : [],
-                count: chatHistory ? chatHistory.messages.length : 0
-            });
-        } catch (error) {
-            next(error);
-        }
-    }
-);
-
-/**
- * @route   DELETE /api/chat/history/:memberId
- * @desc    Clear chat history for a family member
- * @access  Private
- */
-router.delete('/history/:memberId',
-    protect,
-    [
-        param('memberId').isMongoId().withMessage('Invalid member ID')
-    ],
-    async (req, res, next) => {
-        try {
-            const errors = validationResult(req);
-            if (!errors.isEmpty()) {
-                return res.status(400).json({
-                    success: false,
-                    message: 'Validation failed',
-                    errors: errors.array()
-                });
-            }
-
-            const chatHistory = await ChatHistory.findOne({
-                familyMemberId: req.params.memberId,
-                userId: req.user._id
-            });
-
-            if (chatHistory) {
-                chatHistory.clearHistory();
-                await chatHistory.save();
-            }
-
-            res.status(200).json({
-                success: true,
-                message: 'Chat history cleared successfully'
-            });
-        } catch (error) {
-            next(error);
-        }
-    }
-);
+    res.json({
+        success: true,
+        examples
+    });
+});
 
 export default router;
