@@ -22,97 +22,88 @@ const FamilyTreeVisualization = ({ admin, members }) => {
         return x - Math.floor(x);
     };
 
-    // Calculate positions for tree layout
+    // Calculate positions for hierarchical age-based tree layout
     const getTreeLayout = () => {
         if (!admin) return [];
 
         // Tree dimensions
         const treeWidth = 1000;
-        const treeHeight = 600;
+        const treeHeight = 700;
 
-        // Position admin at the root (bottom center)
-        const positions = [
-            {
-                member: admin,
-                x: treeWidth / 2,
-                y: treeHeight - 80,
-                isRoot: true
+        // Combine all members including admin
+        const allMembers = [admin, ...members];
+
+        // Sort by age (eldest first)
+        const sortedMembers = [...allMembers].sort((a, b) => b.age - a.age);
+
+        // Group members into age tiers (within 15 years = same tier)
+        const ageTierSize = 15;
+        const tiers = [];
+        let currentTier = [];
+        let currentTierAge = sortedMembers[0]?.age;
+
+        sortedMembers.forEach(member => {
+            if (currentTierAge - member.age <= ageTierSize) {
+                currentTier.push(member);
+            } else {
+                tiers.push(currentTier);
+                currentTier = [member];
+                currentTierAge = member.age;
             }
-        ];
+        });
+        if (currentTier.length > 0) {
+            tiers.push(currentTier);
+        }
 
-        // Position family members on branches with collision detection
-        if (members.length > 0) {
-            const leafWidth = 160;
-            const leafHeight = 200;
-            const minDistance = 180; // Minimum distance between leaves
+        // Calculate positions
+        const positions = [];
+        const padding = 100;
+        const availableWidth = treeWidth - (2 * padding);
+        const verticalPadding = 120; // Increased to prevent clipping
+        const availableHeight = treeHeight - (2 * verticalPadding);
 
-            members.forEach((member, index) => {
-                let x, y;
-                let attempts = 0;
-                let validPosition = false;
+        // Distribute tiers evenly across vertical space
+        const tierSpacing = tiers.length > 1 ? availableHeight / (tiers.length - 1) : 0;
 
-                // Use member ID for consistent seeded random
-                const seed = parseInt(member._id.substring(member._id.length - 8), 16);
+        tiers.forEach((tier, tierIndex) => {
+            // Calculate Y position for this tier (eldest at top)
+            const y = verticalPadding + (tierIndex * tierSpacing);
 
-                while (!validPosition && attempts < 50) {
-                    // Generate position based on seed + attempts
-                    const randomX = seededRandom(seed + attempts * 1000);
-                    const randomY = seededRandom(seed + attempts * 2000 + 500);
+            // Distribute members horizontally within the tier
+            const memberCount = tier.length;
 
-                    const padding = 100;
-                    const availableWidth = treeWidth - (2 * padding);
-                    x = padding + (randomX * availableWidth);
+            tier.forEach((member, memberIndex) => {
+                let x;
 
-                    // Vertical range
-                    const minY = 80;
-                    const maxY = 400;
-                    y = minY + (randomY * (maxY - minY));
-
-                    // Check collision with existing positions
-                    validPosition = true;
-                    for (const pos of positions) {
-                        const distance = Math.sqrt(
-                            Math.pow(x - pos.x, 2) + Math.pow(y - pos.y, 2)
-                        );
-                        if (distance < minDistance) {
-                            validPosition = false;
-                            break;
-                        }
-                    }
-
-                    attempts++;
-                }
-
-                // If no valid position found after attempts, use fallback grid
-                if (!validPosition) {
-                    const gridCols = 4;
-                    const col = index % gridCols;
-                    const row = Math.floor(index / gridCols);
-                    x = 150 + (col * 200);
-                    y = 120 + (row * 150);
+                if (memberCount === 1) {
+                    // Center single member
+                    x = treeWidth / 2;
+                } else {
+                    // Distribute multiple members evenly
+                    const horizontalSpacing = availableWidth / (memberCount + 1);
+                    x = padding + (horizontalSpacing * (memberIndex + 1));
                 }
 
                 positions.push({
                     member,
                     x,
                     y,
-                    isRoot: false
+                    isRoot: member._id === admin._id,
+                    tier: tierIndex
                 });
             });
-        }
+        });
 
         return positions;
     };
 
     const positions = getTreeLayout();
 
-    // Generate organic branch paths from root to each member
+    // Generate organic branch paths between tiers
     const generateBranch = (start, end) => {
-        const midX = (start.x + end.x) / 2;
         const midY = (start.y + end.y) / 2;
-        const controlX = midX + (Math.random() - 0.5) * 50;
-        const controlY = midY - 100;
-        return `M ${start.x} ${start.y} Q ${controlX} ${controlY} ${end.x} ${end.y}`;
+        // Create smooth curve between tiers
+        return `M ${start.x} ${start.y} C ${start.x} ${midY}, ${end.x} ${midY}, ${end.x} ${end.y}`;
     };
 
     // Mobile List View
@@ -181,21 +172,20 @@ const FamilyTreeVisualization = ({ admin, members }) => {
 
     // Desktop Tree View
     return (
-        <div className="relative w-full overflow-x-auto" style={{ minHeight: '700px' }}>
+        <div className="relative w-full overflow-hidden" style={{ height: 'calc(100vh - 280px)', minHeight: '500px', maxHeight: '700px' }}>
             {/* Responsive container */}
             <div
-                className="relative mx-auto"
+                className="relative mx-auto h-full"
                 style={{
                     minWidth: '100%',
                     width: '1000px',
-                    maxWidth: '100%',
-                    height: '700px'
+                    maxWidth: '100%'
                 }}
             >
                 {/* SVG for tree branches */}
                 <svg
                     className="absolute inset-0 w-full h-full pointer-events-none"
-                    viewBox="0 0 1000 600"
+                    viewBox="0 0 1000 700"
                     preserveAspectRatio="xMidYMid meet"
                 >
                     <defs>
@@ -212,29 +202,23 @@ const FamilyTreeVisualization = ({ admin, members }) => {
                         </filter>
                     </defs>
 
-                    {/* Draw branches from root to each member */}
-                    {positions.slice(1).map((pos, index) => (
-                        <path
-                            key={index}
-                            d={generateBranch(positions[0], pos)}
-                            stroke="url(#branchGradient)"
-                            strokeWidth="3"
-                            fill="none"
-                            strokeLinecap="round"
-                            filter="url(#roughen)"
-                            opacity="0.7"
-                        />
-                    ))}
-
-                    {/* Trunk */}
-                    <path
-                        d={`M 500 ${positions[0].y} L 500 600`}
-                        stroke="url(#branchGradient)"
-                        strokeWidth="8"
-                        fill="none"
-                        strokeLinecap="round"
-                        filter="url(#roughen)"
-                    />
+                    {/* Draw branches connecting tiers */}
+                    {positions.map((pos, index) => {
+                        // Connect to members in the next tier
+                        const nextTierMembers = positions.filter(p => p.tier === pos.tier + 1);
+                        return nextTierMembers.map((nextPos, nextIndex) => (
+                            <path
+                                key={`${index}-${nextIndex}`}
+                                d={generateBranch(pos, nextPos)}
+                                stroke="url(#branchGradient)"
+                                strokeWidth="2"
+                                fill="none"
+                                strokeLinecap="round"
+                                filter="url(#roughen)"
+                                opacity="0.5"
+                            />
+                        ));
+                    })}
 
                     {/* Decorative leaves */}
                     {positions.map((pos, index) => (
@@ -269,7 +253,7 @@ const FamilyTreeVisualization = ({ admin, members }) => {
                         className="absolute transform -translate-x-1/2 -translate-y-1/2 pointer-events-auto"
                         style={{
                             left: `${(pos.x / 1000) * 100}%`,
-                            top: `${(pos.y / 600) * 100}%`,
+                            top: `${(pos.y / 700) * 100}%`,
                             animation: `float ${5 + Math.random() * 3}s ease-in-out infinite`,
                             animationDelay: `${index * 0.2}s`
                         }}
