@@ -6,6 +6,7 @@ import GlassCard from '../components/ui/GlassCard';
 import Button from '../components/ui/Button';
 import ReportUpload from '../components/medical/ReportUpload';
 import MedicalChatbot from '../components/medical/MedicalChatbot';
+import HealthOverview from '../components/health/HealthOverview';
 
 const MemberHealthDashboard = () => {
     const { memberId } = useParams();
@@ -17,7 +18,7 @@ const MemberHealthDashboard = () => {
     const [labResults, setLabResults] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedReport, setSelectedReport] = useState(null);
-    const [activeTab, setActiveTab] = useState('reports'); // 'reports', 'chat'
+    const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'reports', 'chat'
 
     useEffect(() => {
         fetchMemberData();
@@ -118,6 +119,15 @@ const MemberHealthDashboard = () => {
                 <div className="mb-6">
                     <div className="flex space-x-2 border-b border-sage/20">
                         <button
+                            onClick={() => setActiveTab('overview')}
+                            className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === 'overview'
+                                ? 'text-sage border-b-2 border-sage'
+                                : 'text-charcoal/60 hover:text-charcoal'
+                                }`}
+                        >
+                            📊 Health Overview
+                        </button>
+                        <button
                             onClick={() => setActiveTab('reports')}
                             className={`px-4 py-2 text-sm font-medium transition-colors ${activeTab === 'reports'
                                 ? 'text-sage border-b-2 border-sage'
@@ -139,7 +149,10 @@ const MemberHealthDashboard = () => {
                 </div>
 
                 {/* Tab Content */}
-                {activeTab === 'reports' ? (
+                {activeTab === 'overview' ? (
+                    /* Health Overview Tab */
+                    <HealthOverview memberId={memberId} />
+                ) : activeTab === 'reports' ? (
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
                         {/* Upload Section */}
                         <div className="lg:col-span-1">

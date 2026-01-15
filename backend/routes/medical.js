@@ -10,7 +10,16 @@ import MedicalReport from '../models/MedicalReport.js';
 import LabResult from '../models/LabResult.js';
 import FamilyMember from '../models/FamilyMember.js';
 import { protect } from '../middleware/auth.js';
-import chromaService from '../services/chromaService.js';
+import cloudStorage from '../services/cloudStorageService.js';
+import {
+    calculateHealthScore,
+    getReportHealthStatus,
+    getDefaultMarker,
+    compareReports,
+    getReportSummary,
+    getTopChanges,
+    getChangeDescription
+} from '../utils/healthAnalysis.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -112,7 +121,8 @@ router.post('/upload/:memberId',
                 fileName: req.file.originalname,
                 filePath: req.file.path,
                 reportDate: new Date(reportDate),
-                extractionStatus: 'processing'
+                extractionStatus: 'processing',
+                originalFileName: req.file.originalname
             });
 
             // Call Python extraction service
@@ -148,41 +158,39 @@ router.post('/upload/:memberId',
                     labResults.push(labResult);
                 }
 
+                // Upload to Cloudinary if configured
+                if (cloudStorage.isCloudinaryConfigured()) {
+                    try {
+                        const { publicId } = await cloudStorage.uploadToCloud(
+                            req.file.path,
+                            req.file.originalname,
+                            memberId
+                        );
+
+                        medicalReport.cloudPublicId = publicId;
+
+                        console.log('📤 Report uploaded to Cloudinary:', publicId);
+
+                        // delete local file
+                        fs.unlink(req.file.path, () => { });
+
+                        console.log('📤 Report uploaded to Cloudinary:', publicId);
+
+                        // Optionally delete local file after cloud upload
+                        fs.unlink(req.file.path, (err) => {
+                            if (err) console.error('Error deleting local file:', err);
+                            else console.log('🗑️ Local file deleted after cloud upload');
+                        });
+                    } catch (cloudError) {
+                        console.error('Cloud upload warning (non-blocking):', cloudError.message);
+                        // Don't fail - keep local file as backup
+                    }
+                }
+
                 // Update report status
                 medicalReport.extractionStatus = 'completed';
                 medicalReport.markerCount = markers.length;
                 await medicalReport.save();
-
-                // Store report summary in vector database (async, don't block response)
-                try {
-                    const summary = chromaService.generateReportSummary(
-                        labResults,
-                        reportDate,
-                        {
-                            name: member.name,
-                            age: member.age,
-                            gender: member.gender,
-                            conditions: member.existingConditions || []
-                        }
-                    );
-
-                    // Store in Chroma (fire and forget)
-                    chromaService.storeReportSummary(
-                        req.user._id.toString(),
-                        medicalReport._id.toString(),
-                        summary,
-                        {
-                            reportDate: reportDate,
-                            memberName: member.name,
-                            memberId: memberId
-                        }
-                    ).catch(err => {
-                        console.error('Vector store error (non-blocking):', err.message);
-                    });
-                } catch (vectorError) {
-                    // Don't fail the request if vector storage fails
-                    console.error('Vector summary generation error:', vectorError.message);
-                }
 
                 res.status(201).json({
                     success: true,
@@ -191,7 +199,8 @@ router.post('/upload/:memberId',
                         id: medicalReport._id,
                         fileName: medicalReport.fileName,
                         reportDate: medicalReport.reportDate,
-                        markerCount: medicalReport.markerCount
+                        markerCount: medicalReport.markerCount,
+                        cloudUrl: medicalReport.cloudUrl || null
                     },
                     markers: labResults
                 });
@@ -259,6 +268,52 @@ router.get('/reports/:memberId',
         }
     }
 );
+
+/**
+ * @route   GET /api/medical/report/:reportId/view
+ * @desc    Get the cloud URL to view a specific report
+ * @access  Private
+ */
+router.get('/report/:reportId/view',
+    protect,
+    [param('reportId').isMongoId()],
+    async (req, res, next) => {
+        try {
+            const report = await MedicalReport.findById(req.params.reportId);
+
+            if (!report) {
+                return res.status(404).json({ success: false, message: 'Report not found' });
+            }
+
+            if (report.userId.toString() !== req.user._id.toString()) {
+                return res.status(403).json({ success: false, message: 'Access denied' });
+            }
+
+            if (!report.cloudPublicId) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Report not available in cloud storage'
+                });
+            }
+
+            const signedUrl = cloudStorage.getSignedUrl(
+                report.cloudPublicId,
+                600
+            );
+
+            res.json({
+                success: true,
+                viewUrl: signedUrl,
+                fileName: report.originalFileName || report.fileName,
+                reportDate: report.reportDate
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
 
 /**
  * @route   GET /api/medical/markers/:memberId
@@ -347,6 +402,129 @@ router.get('/trends/:memberId/:marker',
                 marker,
                 count: trend.length,
                 data: trend
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
+/**
+ * @route   GET /api/medical/health-overview/:memberId
+ * @desc    Get health overview data including timeline and trends
+ * @access  Private
+ */
+router.get('/health-overview/:memberId',
+    protect,
+    [param('memberId').isMongoId()],
+    async (req, res, next) => {
+        try {
+            const { memberId } = req.params;
+
+            // SECURITY: Verify access
+            const member = await FamilyMember.findOne({
+                _id: memberId,
+                userId: req.user._id
+            });
+
+            if (!member) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied'
+                });
+            }
+
+            // Get all reports for this member
+            const reports = await MedicalReport.find({ memberId })
+                .sort({ reportDate: -1 })
+                .lean();
+
+            if (reports.length === 0) {
+                return res.json({
+                    success: true,
+                    timeline: [],
+                    defaultMarker: getDefaultMarker(member.age, member.gender),
+                    availableMarkers: [],
+                    changes: {}
+                });
+            }
+
+            // Build timeline data
+            const timeline = [];
+            let previousResults = null;
+
+            // Process reports in chronological order for comparison
+            const sortedReports = [...reports].reverse();
+
+            for (const report of sortedReports) {
+                // Get lab results for this report
+                const labResults = await LabResult.find({ reportId: report._id }).lean();
+
+                if (labResults.length > 0) {
+                    const healthScore = calculateHealthScore(labResults);
+                    const status = getReportHealthStatus(healthScore);
+                    const abnormalCount = labResults.filter(r => r.isAbnormal).length;
+
+                    let comparisonText = '';
+                    if (previousResults && previousResults.length > 0) {
+                        const prevScore = calculateHealthScore(previousResults);
+                        if (healthScore > prevScore) {
+                            comparisonText = ' (improved from last report)';
+                        } else if (healthScore < prevScore) {
+                            comparisonText = ' (declined from last report)';
+                        } else {
+                            comparisonText = ' (stable compared to last report)';
+                        }
+                    }
+
+                    timeline.push({
+                        reportId: report._id,
+                        reportDate: report.reportDate,
+                        healthScore,
+                        status,
+                        markerCount: labResults.length,
+                        abnormalCount,
+                        summary: getReportSummary(abnormalCount, labResults.length, comparisonText)
+                    });
+
+                    previousResults = labResults;
+                }
+            }
+
+            // Reverse timeline to show most recent first
+            timeline.reverse();
+
+            // Get all unique markers
+            const availableMarkers = await LabResult.getMarkersList(memberId);
+
+            // Calculate changes between most recent two reports
+            let changes = {};
+            if (timeline.length >= 2) {
+                const latestReportId = timeline[0].reportId;
+                const previousReportId = timeline[1].reportId;
+
+                const latestResults = await LabResult.find({ reportId: latestReportId }).lean();
+                const previousResults = await LabResult.find({ reportId: previousReportId }).lean();
+
+                const rawChanges = compareReports(latestResults, previousResults);
+                const topChanges = getTopChanges(rawChanges, 5);
+
+                // Convert to object with descriptions
+                topChanges.forEach(({ marker, change }) => {
+                    changes[marker] = getChangeDescription(change);
+                });
+            }
+
+            // Get default marker based on member's age and gender
+            const defaultMarker = getDefaultMarker(member.age, member.gender);
+
+            res.json({
+                success: true,
+                timeline,
+                defaultMarker,
+                availableMarkers,
+                changes
             });
 
         } catch (error) {

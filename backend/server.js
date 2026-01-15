@@ -1,5 +1,8 @@
-import express from 'express';
+// Load environment variables FIRST before any other imports
 import dotenv from 'dotenv';
+dotenv.config();
+
+import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -12,9 +15,6 @@ import familyRoutes from './routes/family.js';
 import recordsRoutes from './routes/records.js';
 import chatRoutes from './routes/chat.js';
 import medicalRoutes from './routes/medical.js';
-
-// Load environment variables
-dotenv.config();
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);

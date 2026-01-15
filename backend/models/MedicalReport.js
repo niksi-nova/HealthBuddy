@@ -48,6 +48,19 @@ const medicalReportSchema = new mongoose.Schema({
     extractionError: {
         type: String,
         default: null
+    },
+    // Cloud storage fields
+    cloudUrl: {
+        type: String,
+        default: null
+    },
+    cloudPublicId: {
+        type: String,
+        default: null
+    },
+    originalFileName: {
+        type: String,
+        default: null
     }
 }, {
     timestamps: true
