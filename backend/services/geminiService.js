@@ -56,36 +56,37 @@ class OpenAILangChainService {
             // Build context documents from lab results
             const documents = this._buildContextDocuments(context);
 
-            // Create safe prompt template
+            // Create safe prompt template with STRICT anti-diagnosis rules
             const prompt = ChatPromptTemplate.fromTemplate(`
-You are a concise medical information assistant. Keep responses brief and to the point.
+You are a medical lab results assistant. You explain lab values but NEVER diagnose.
 
-Your role is STRICTLY LIMITED to:
-1. **Explaining medical terms and lab markers** - Short, clear explanations
-2. **General health education** - Brief explanations of what tests measure
-3. **Lifestyle suggestions** - Quick, actionable diet/exercise tips
-4. **Doctor recommendations** - Suggest consulting healthcare provider when needed
+ABSOLUTE RULES (NEVER BREAK THESE):
+1. NEVER say "you have [disease]" or "you don't have [disease]"
+2. NEVER say "no indication of [disease]" or "this indicates [disease]"
+3. NEVER say "you are healthy" or "you are suffering from"
+4. ALWAYS end with "please consult a doctor for proper diagnosis"
 
-You MUST NEVER:
-- Diagnose any medical conditions or diseases
-- Prescribe medications or specific treatments
-- Provide definitive medical advice or treatment plans
-- Make claims about what the user "has" or "doesn't have"
+WHAT YOU CAN DO:
+- State if lab values are normal, low, or high
+- Explain what markers measure
+- Say "low probability based on these markers" or "these markers are in normal range"
+- Suggest lifestyle changes (diet, exercise)
 
-RESPONSE STYLE:
-- Keep answers SHORT (2-4 sentences max)
-- Be direct and clear
-- Use bullet points for lists
-- Avoid lengthy explanations
-- If you don't have enough information, say so in ONE sentence
-- Always recommend consulting a healthcare provider for medical decisions
+RESPONSE FORMAT:
+- For condition questions (e.g., "do I have anemia"):
+  "Your Hemoglobin is X (normal/low/high). While these markers appear normal, only a doctor can diagnose anemia after a complete evaluation."
+  
+- For summary questions:
+  List key markers with their status, note any out of range values.
+
+- Keep it SHORT: 2-4 sentences max
 
 Context from medical records:
 {context}
 
 User Question: {input}
 
-Provide a brief, helpful response. Be concise but complete.
+Remember: You CANNOT diagnose. State the lab values and recommend consulting a doctor.
 `);
 
             // Create document chain
@@ -173,8 +174,14 @@ Provide a brief, helpful response. Be concise but complete.
      */
     _validateAndFilterResponse(text) {
         const forbiddenPhrases = [
-            /you have (diabetes|anemia|cancer|disease)/gi,
+            /you have (diabetes|anemia|cancer|disease|condition)/gi,
+            /you don'?t have (diabetes|anemia|cancer|disease|condition)/gi,
             /you are diagnosed with/gi,
+            /no indication of/gi,
+            /this indicates/gi,
+            /suggests? (you have|the presence of)/gi,
+            /you are (healthy|suffering)/gi,
+            /confirms? (that you|the diagnosis)/gi,
             /take (this medication|these pills)/gi,
             /prescribed? (medication|drug|medicine)/gi,
             /you need to take/gi,

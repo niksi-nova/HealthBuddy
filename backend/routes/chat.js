@@ -13,69 +13,114 @@ const router = express.Router();
 
 /**
  * Parse time range from user message
- * Default: last 30 days
+ * Supports: month names, relative time periods
+ * Returns null to fetch ALL data if no specific time mentioned
  */
 const parseTimeRange = (message) => {
     const lower = message.toLowerCase();
     const now = new Date();
 
-    if (lower.includes('past 1 month') || lower.includes('last 1 month')) {
-        const from = new Date();
-        from.setMonth(now.getMonth() - 1);
-        return { from, to: now };
+    // Month names mapping - use regex word boundaries to avoid false matches
+    // e.g., "summarize" should NOT match "mar" (March)
+    const monthPatterns = [
+        { pattern: /\b(january|jan)\b/, month: 0 },
+        { pattern: /\b(february|feb)\b/, month: 1 },
+        { pattern: /\b(march|mar)\b/, month: 2 },
+        { pattern: /\b(april|apr)\b/, month: 3 },
+        { pattern: /\bmay\b/, month: 4 },
+        { pattern: /\b(june|jun)\b/, month: 5 },
+        { pattern: /\b(july|jul)\b/, month: 6 },
+        { pattern: /\b(august|aug)\b/, month: 7 },
+        { pattern: /\b(september|sep|sept)\b/, month: 8 },
+        { pattern: /\b(october|oct)\b/, month: 9 },
+        { pattern: /\b(november|nov)\b/, month: 10 },
+        { pattern: /\b(december|dec)\b/, month: 11 }
+    ];
+
+    // Check for specific month names using word boundaries
+    for (const { pattern, month } of monthPatterns) {
+        if (pattern.test(lower)) {
+            // If the month is in the future relative to current month, use previous year
+            let year = now.getFullYear();
+            if (month > now.getMonth()) {
+                year = year - 1;
+            }
+            const from = new Date(year, month, 1);
+            const to = new Date(year, month + 1, 0, 23, 59, 59); // Last day of month
+            return { from, to, specific: true };
+        }
     }
 
-    if (lower.includes('past 3 months') || lower.includes('last 3 months')) {
+    // Relative time periods
+    if (lower.includes('past year') || lower.includes('last year')) {
         const from = new Date();
-        from.setMonth(now.getMonth() - 3);
-        return { from, to: now };
+        from.setFullYear(now.getFullYear() - 1);
+        return { from, to: now, specific: true };
+    }
+
+    if (lower.includes('this year')) {
+        const from = new Date(now.getFullYear(), 0, 1);
+        return { from, to: now, specific: true };
     }
 
     if (lower.includes('past 6 months') || lower.includes('last 6 months')) {
         const from = new Date();
         from.setMonth(now.getMonth() - 6);
-        return { from, to: now };
+        return { from, to: now, specific: true };
     }
 
-    // Default: last 30 days
-    const from = new Date();
-    from.setDate(now.getDate() - 30);
-    return { from, to: now };
+    if (lower.includes('past 3 months') || lower.includes('last 3 months')) {
+        const from = new Date();
+        from.setMonth(now.getMonth() - 3);
+        return { from, to: now, specific: true };
+    }
+
+    if (lower.includes('past 1 month') || lower.includes('last 1 month') || lower.includes('last month')) {
+        const from = new Date();
+        from.setMonth(now.getMonth() - 1);
+        return { from, to: now, specific: true };
+    }
+
+    if (lower.includes('past week') || lower.includes('last week')) {
+        const from = new Date();
+        from.setDate(now.getDate() - 7);
+        return { from, to: now, specific: true };
+    }
+
+    if (lower.includes('latest') || lower.includes('recent') || lower.includes('last report')) {
+        // Get latest reports - use wide range and limit in query
+        return { from: new Date(2000, 0, 1), to: now, specific: false, latest: true };
+    }
+
+    // Default: fetch ALL available data
+    return { from: new Date(2000, 0, 1), to: now, specific: false };
 };
 
 /**
- * Detect user intent
+ * Extract health topic from message (anemia, diabetes, etc.)
  */
-const detectIntent = (message) => {
+const extractHealthTopic = (message) => {
     const text = message.toLowerCase();
 
-    if (text.includes('abnormal') || text.includes('out of range')) {
-        return 'abnormal';
+    const healthTopics = {
+        'anemia': ['hemoglobin', 'hb', 'rbc', 'red blood cell', 'hematocrit', 'mcv', 'mch', 'mchc', 'iron', 'ferritin', 'pcv'],
+        'diabetes': ['glucose', 'blood sugar', 'hba1c', 'fasting glucose', 'random glucose', 'sugar'],
+        'thyroid': ['tsh', 't3', 't4', 'thyroid'],
+        'liver': ['alt', 'ast', 'sgpt', 'sgot', 'bilirubin', 'albumin', 'liver'],
+        'kidney': ['creatinine', 'urea', 'bun', 'egfr', 'uric acid', 'kidney'],
+        'cholesterol': ['cholesterol', 'ldl', 'hdl', 'triglycerides', 'lipid'],
+        'infection': ['wbc', 'white blood cell', 'neutrophil', 'lymphocyte', 'esr', 'crp'],
+        'vitamin': ['vitamin d', 'vitamin b12', 'b12', 'folate', 'folic acid'],
+        'platelet': ['platelet', 'plt', 'mpv']
+    };
+
+    for (const [topic, markers] of Object.entries(healthTopics)) {
+        if (text.includes(topic)) {
+            return { topic, relatedMarkers: markers };
+        }
     }
 
-    if (text.includes('summarize') || text.includes('summary')) {
-        return 'summary';
-    }
-
-    if (
-        text.includes('do i have') ||
-        text.includes('health issue') ||
-        text.includes('problem') ||
-        text.includes('concern')
-    ) {
-        return 'interpretation';
-    }
-
-    if (
-        text.includes('suggest') ||
-        text.includes('improve') ||
-        text.includes('what should i do') ||
-        text.includes('how can i')
-    ) {
-        return 'advice';
-    }
-
-    return 'summary'; // safe default
+    return null;
 };
 
 /* ----------------------------- */
@@ -84,7 +129,7 @@ const detectIntent = (message) => {
 
 /**
  * @route   POST /api/chat/:memberId
- * @desc    Chat with medical AI assistant (LAB DATA ONLY, deterministic)
+ * @desc    Chat with medical AI assistant
  * @access  Private
  */
 router.post(
@@ -140,148 +185,141 @@ router.post(
             }
 
             /* ----------------------------- */
-            /* Intent + Time Range           */
+            /* Parse time range and topic    */
             /* ----------------------------- */
 
-            const intent = detectIntent(message);
-            const { from, to } = parseTimeRange(message);
+            const timeRange = parseTimeRange(message);
+            const { from, to } = timeRange;
+            const healthTopic = extractHealthTopic(message);
 
             /* ----------------------------- */
-            /* Fetch lab results (deterministic)
+            /* Fetch lab results             */
             /* ----------------------------- */
 
-            const labResults = await LabResult.find({
+            let query = {
                 memberId,
                 testDate: { $gte: from, $lte: to }
-            })
-                .sort({ testDate: 1 })
+            };
+
+            let labResults = await LabResult.find(query)
+                .sort({ testDate: -1 })
                 .lean();
 
+            // Debug log
+            console.log(`[Chat] Query for memberId: ${memberId}, from: ${from.toISOString()}, to: ${to.toISOString()}`);
+            console.log(`[Chat] Found ${labResults.length} lab results`);
+
+            // If a specific health topic was mentioned, prioritize those markers
+            let relevantMarkers = [];
+            if (healthTopic) {
+                relevantMarkers = labResults.filter(r => {
+                    const markerLower = r.marker.toLowerCase();
+                    return healthTopic.relatedMarkers.some(m => markerLower.includes(m));
+                });
+            }
+
             if (labResults.length === 0) {
+                // Try fetching without date filter to check if any data exists
+                const anyResults = await LabResult.countDocuments({ memberId });
+
+                if (anyResults > 0) {
+                    return res.json({
+                        success: true,
+                        response: `I found ${anyResults} lab results for this profile, but none in the time period you specified. Try asking about "all my reports" or "latest reports" to see all available data.`,
+                        confidence: 'none'
+                    });
+                }
+
                 return res.json({
                     success: true,
-                    response: "I don't have lab results for the selected time period.",
+                    response: `No lab results have been uploaded for this profile yet. Please upload some medical reports first.`,
                     confidence: 'none'
                 });
             }
 
             /* ----------------------------- */
-            /* Handle intents                */
+            /* Build context for AI          */
             /* ----------------------------- */
 
-            /* ---- SUMMARY ---- */
-            if (intent === 'summary') {
-                const prompt = `
-Summarize the following lab results by date.
-Do NOT diagnose.
-Do NOT give medical advice.
-Only describe what is present.
-
-${labResults.map(r =>
-                    `${r.testDate.toDateString()} - ${r.marker}: ${r.value} ${r.unit || ''}`
-                ).join('\n')}
-`;
-
-                const aiResponse = await geminiService.generateMedicalResponse(prompt);
-
-                return res.json({
-                    success: true,
-                    response: aiResponse.response,
-                    confidence: 'high',
-                    labDataCount: labResults.length
-                });
-            }
-
-            /* ---- ABNORMAL VALUES ---- */
-            if (intent === 'abnormal') {
-                const abnormal = labResults.filter(r => r.isAbnormal);
-
-                if (abnormal.length === 0) {
-                    return res.json({
-                        success: true,
-                        response: "All recorded lab values are within their reference ranges.",
-                        confidence: 'high'
+            // Format lab results for context
+            const formatLabResults = (results) => {
+                return results.map(r => {
+                    const date = new Date(r.testDate).toLocaleDateString('en-IN', {
+                        day: 'numeric', month: 'short', year: 'numeric'
                     });
+                    const abnormalFlag = r.isAbnormal ? ' ⚠️ OUT OF RANGE' : ' ✓ Normal';
+                    const refRange = r.referenceRange ? ` (Ref: ${r.referenceRange})` : '';
+                    return `${date} - ${r.marker}: ${r.value} ${r.unit || ''}${refRange}${abnormalFlag}`;
+                }).join('\n');
+            };
+
+            // Build the prompt with STRICT safety guardrails
+            let prompt = `
+CRITICAL INSTRUCTIONS - YOU MUST FOLLOW THESE EXACTLY:
+
+1. NEVER DIAGNOSE. You are NOT a doctor. You CANNOT and MUST NOT say:
+   - "You have [disease]" or "You don't have [disease]"
+   - "This indicates [disease]" or "No indication of [disease]"
+   - "You are suffering from..." or "You are healthy"
+   
+2. INSTEAD, you MUST ALWAYS say things like:
+   - "Your [marker] is within the normal range, which is generally a positive sign. However, only a doctor can diagnose conditions like [disease] after a complete evaluation."
+   - "Based on these values, there appears to be a low probability of [condition], but please consult a healthcare provider for proper diagnosis."
+   - "These markers look normal/abnormal. For any concerns about [condition], please consult your doctor."
+
+3. For questions like "do I have anemia/diabetes/etc":
+   - Look at the RELEVANT markers (Hemoglobin, RBC for anemia; glucose for diabetes, etc.)
+   - State whether those markers are normal, high, or low
+   - NEVER diagnose - always say "a doctor must evaluate this" or similar
+
+4. Be CONCISE - 2-4 sentences max unless listing multiple markers
+
+---
+
+User Question: "${message}"
+
+Patient Information:
+- Age: ${member.age}
+- Gender: ${member.gender}
+${member.existingConditions?.length > 0 ? `- Existing Conditions: ${member.existingConditions.join(', ')}` : ''}
+
+`;
+
+            // Add relevant markers if a specific topic was asked
+            if (healthTopic && relevantMarkers.length > 0) {
+                prompt += `
+RELEVANT Lab Results for "${healthTopic.topic}":
+${formatLabResults(relevantMarkers)}
+
+`;
+            }
+
+            // Add all lab results (limit to most recent 50 to avoid token limits)
+            const recentResults = labResults.slice(0, 50);
+            prompt += `
+All Available Lab Results (${recentResults.length} most recent):
+${formatLabResults(recentResults)}
+
+---
+
+Now answer the user's question. Remember: NEVER diagnose. Always recommend consulting a doctor for diagnosis.
+`;
+
+            // Generate AI response
+            const aiResponse = await geminiService.generateMedicalResponse(prompt, {
+                labResults: healthTopic && relevantMarkers.length > 0 ? relevantMarkers : recentResults,
+                memberInfo: {
+                    age: member.age,
+                    gender: member.gender,
+                    conditions: member.existingConditions
                 }
-
-                const prompt = `
-Explain the following abnormal lab values in simple terms.
-Do NOT diagnose or recommend treatment.
-
-${abnormal.map(r =>
-                    `${r.marker}: ${r.value} ${r.unit || ''} (outside reference range)`
-                ).join('\n')}
-`;
-
-                const aiResponse = await geminiService.generateMedicalResponse(prompt);
-
-                return res.json({
-                    success: true,
-                    response: aiResponse.response,
-                    confidence: 'high'
-                });
-            }
-
-            /* ---- INTERPRETATION ---- */
-            if (intent === 'interpretation') {
-                const prompt = `
-Based ONLY on these lab results, describe any notable patterns or concerns.
-Do NOT diagnose.
-If the data is insufficient, say so.
-
-Patient info:
-Age: ${member.age}
-Gender: ${member.gender}
-
-Lab Results:
-${labResults.map(r =>
-                    `${r.testDate.toDateString()} - ${r.marker}: ${r.value} ${r.unit || ''}`
-                ).join('\n')}
-`;
-
-                const aiResponse = await geminiService.generateMedicalResponse(prompt);
-
-                return res.json({
-                    success: true,
-                    response: aiResponse.response,
-                    confidence: 'medium'
-                });
-            }
-
-            /* ---- ADVICE (GENERAL ONLY) ---- */
-            if (intent === 'advice') {
-                const prompt = `
-Provide GENERAL, NON-MEDICAL wellness suggestions
-based on the following lab trends.
-Do NOT prescribe or diagnose.
-
-Patient:
-Age: ${member.age}
-Gender: ${member.gender}
-
-Lab Results:
-${labResults.map(r =>
-                    `${r.marker}: ${r.value} ${r.unit || ''}`
-                ).join('\n')}
-`;
-
-                const aiResponse = await geminiService.generateMedicalResponse(prompt);
-
-                return res.json({
-                    success: true,
-                    response: aiResponse.response,
-                    confidence: 'low'
-                });
-            }
-
-            /* ----------------------------- */
-            /* Fallback (should not happen)  */
-            /* ----------------------------- */
+            });
 
             return res.json({
                 success: true,
-                response: "I'm not sure how to interpret that request.",
-                confidence: 'none'
+                response: aiResponse.response,
+                confidence: 'high',
+                labDataCount: labResults.length
             });
 
         } catch (error) {
@@ -308,12 +346,14 @@ router.get('/example-questions', (req, res) => {
     res.json({
         success: true,
         examples: [
-            "Summarize my results",
-            "Show my test results from the past 1 month",
-            "Are any of my markers abnormal?",
-            "Do I have any health issues?",
-            "Suggest ways to improve my health",
-            "Compare my recent lab results"
+            "Do I have anemia?",
+            "Summarize my reports from December",
+            "Are any of my values out of range?",
+            "How is my cholesterol?",
+            "What does my thyroid test show?",
+            "Show my latest blood reports",
+            "What factors varied a lot recently?",
+            "Compare my hemoglobin levels over time"
         ]
     });
 });
