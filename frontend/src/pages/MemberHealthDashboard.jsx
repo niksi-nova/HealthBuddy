@@ -18,7 +18,13 @@ const MemberHealthDashboard = () => {
     const [labResults, setLabResults] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedReport, setSelectedReport] = useState(null);
-    const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'reports', 'chat'
+    const [activeTab, setActiveTab] = useState('overview');
+
+    // Delete confirmation state
+    const [showDeleteMemberModal, setShowDeleteMemberModal] = useState(false);
+    const [showDeleteReportModal, setShowDeleteReportModal] = useState(false);
+    const [reportToDelete, setReportToDelete] = useState(null);
+    const [deleting, setDeleting] = useState(false);
 
     useEffect(() => {
         fetchMemberData();
@@ -39,7 +45,6 @@ const MemberHealthDashboard = () => {
             const { data } = await api.get(`/medical/reports/${memberId}`);
             setReports(data.reports);
 
-            // Fetch lab results for the most recent report
             if (data.reports.length > 0) {
                 fetchLabResults(data.reports[0]._id);
             }
@@ -52,18 +57,58 @@ const MemberHealthDashboard = () => {
 
     const fetchLabResults = async (reportId) => {
         try {
-            // Get all lab results for this member
             const { data } = await api.get(`/medical/trends/${memberId}/all`);
             setLabResults(data.results || []);
             setSelectedReport(reportId);
         } catch (error) {
-            // Fallback: get results by querying each report
             console.log('Using fallback method for lab results');
         }
     };
 
     const handleReportUploaded = () => {
         fetchReports();
+    };
+
+    // Delete member
+    const handleDeleteMember = async () => {
+        setDeleting(true);
+        try {
+            await api.delete(`/family/members/${memberId}`);
+            navigate('/');
+        } catch (error) {
+            console.error('Error deleting member:', error);
+            alert('Failed to delete member. Please try again.');
+        } finally {
+            setDeleting(false);
+            setShowDeleteMemberModal(false);
+        }
+    };
+
+    // Delete report
+    const handleDeleteReport = async () => {
+        if (!reportToDelete) return;
+        setDeleting(true);
+        try {
+            await api.delete(`/medical/report/${reportToDelete}`);
+            setReports(reports.filter(r => r._id !== reportToDelete));
+            if (selectedReport === reportToDelete) {
+                setSelectedReport(null);
+                setLabResults([]);
+            }
+            setReportToDelete(null);
+        } catch (error) {
+            console.error('Error deleting report:', error);
+            alert('Failed to delete report. Please try again.');
+        } finally {
+            setDeleting(false);
+            setShowDeleteReportModal(false);
+        }
+    };
+
+    const confirmDeleteReport = (reportId, e) => {
+        e.stopPropagation();
+        setReportToDelete(reportId);
+        setShowDeleteReportModal(true);
     };
 
     if (loading) {
@@ -111,6 +156,17 @@ const MemberHealthDashboard = () => {
                                     {member?.relation} • {member?.age} years
                                 </p>
                             </div>
+
+                            {/* Delete Member Button */}
+                            {!member?.isAdmin && (
+                                <button
+                                    onClick={() => setShowDeleteMemberModal(true)}
+                                    className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                    title="Delete Member"
+                                >
+                                    🗑️
+                                </button>
+                            )}
                         </div>
                     </GlassCard>
                 </div>
@@ -208,6 +264,15 @@ const MemberHealthDashboard = () => {
                                                         {report.extractionStatus === 'failed' && 'Failed'}
                                                         {report.extractionStatus === 'processing' && 'Processing'}
                                                     </span>
+
+                                                    {/* Delete Report Button */}
+                                                    <button
+                                                        onClick={(e) => confirmDeleteReport(report._id, e)}
+                                                        className="ml-2 p-1 text-red-400 hover:text-red-600 hover:bg-red-50 rounded transition-colors"
+                                                        title="Delete Report"
+                                                    >
+                                                        ✕
+                                                    </button>
                                                 </div>
                                             </div>
                                         ))}
@@ -275,6 +340,69 @@ const MemberHealthDashboard = () => {
                     </div>
                 )}
             </div>
+
+            {/* Delete Member Confirmation Modal */}
+            {showDeleteMemberModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-xl">
+                        <h3 className="text-xl font-bold text-charcoal mb-4">Delete Family Member</h3>
+                        <p className="text-charcoal/70 mb-6">
+                            Are you sure you want to delete <strong>{member?.name}</strong>?
+                            This will also delete all their medical reports and lab results.
+                            This action cannot be undone.
+                        </p>
+                        <div className="flex space-x-3 justify-end">
+                            <button
+                                onClick={() => setShowDeleteMemberModal(false)}
+                                className="px-4 py-2 text-charcoal/70 hover:bg-gray-100 rounded-lg transition-colors"
+                                disabled={deleting}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleDeleteMember}
+                                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
+                                disabled={deleting}
+                            >
+                                {deleting ? 'Deleting...' : 'Delete Member'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Report Confirmation Modal */}
+            {showDeleteReportModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                    <div className="bg-white rounded-xl p-6 max-w-md w-full shadow-xl">
+                        <h3 className="text-xl font-bold text-charcoal mb-4">Delete Report</h3>
+                        <p className="text-charcoal/70 mb-6">
+                            Are you sure you want to delete this report?
+                            All associated lab results will also be deleted.
+                            This action cannot be undone.
+                        </p>
+                        <div className="flex space-x-3 justify-end">
+                            <button
+                                onClick={() => {
+                                    setShowDeleteReportModal(false);
+                                    setReportToDelete(null);
+                                }}
+                                className="px-4 py-2 text-charcoal/70 hover:bg-gray-100 rounded-lg transition-colors"
+                                disabled={deleting}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={handleDeleteReport}
+                                className="px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors disabled:opacity-50"
+                                disabled={deleting}
+                            >
+                                {deleting ? 'Deleting...' : 'Delete Report'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 };

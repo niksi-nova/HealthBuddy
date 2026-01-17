@@ -1,6 +1,8 @@
 import express from 'express';
 import { body, param, validationResult } from 'express-validator';
 import FamilyMember from '../models/FamilyMember.js';
+import MedicalReport from '../models/MedicalReport.js';
+import LabResult from '../models/LabResult.js';
 import { protect } from '../middleware/auth.js';
 import upload from '../middleware/upload.js';
 
@@ -232,9 +234,19 @@ router.delete('/members/:id',
                 });
             }
 
+            // Cascade delete: remove all reports and lab results for this member
+            const reports = await MedicalReport.find({ memberId: req.params.id });
+            for (const report of reports) {
+                await LabResult.deleteMany({ reportId: report._id });
+            }
+            await MedicalReport.deleteMany({ memberId: req.params.id });
+            await LabResult.deleteMany({ memberId: req.params.id });
+
+            console.log(`🗑️ Deleted member ${member.name} and all associated data`);
+
             res.status(200).json({
                 success: true,
-                message: 'Family member deleted successfully'
+                message: 'Family member and all associated data deleted successfully'
             });
         } catch (error) {
             next(error);

@@ -533,4 +533,75 @@ router.get('/health-overview/:memberId',
     }
 );
 
+/**
+ * @route   DELETE /api/medical/report/:reportId
+ * @desc    Delete a medical report and its associated lab results
+ * @access  Private
+ */
+router.delete('/report/:reportId',
+    protect,
+    [param('reportId').isMongoId().withMessage('Invalid report ID')],
+    async (req, res, next) => {
+        try {
+            const errors = validationResult(req);
+            if (!errors.isEmpty()) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Validation failed',
+                    errors: errors.array()
+                });
+            }
+
+            const { reportId } = req.params;
+
+            // Find the report
+            const report = await MedicalReport.findById(reportId);
+
+            if (!report) {
+                return res.status(404).json({
+                    success: false,
+                    message: 'Report not found'
+                });
+            }
+
+            // SECURITY: Verify the report belongs to the user
+            if (report.userId.toString() !== req.user._id.toString()) {
+                return res.status(403).json({
+                    success: false,
+                    message: 'Access denied'
+                });
+            }
+
+            // Delete associated lab results
+            await LabResult.deleteMany({ reportId: report._id });
+
+            // Delete from cloud storage if exists
+            if (report.cloudPublicId && cloudStorage.isCloudinaryConfigured()) {
+                try {
+                    await cloudStorage.deleteFromCloud(report.cloudPublicId);
+                    console.log('🗑️ Deleted from cloud storage:', report.cloudPublicId);
+                } catch (cloudError) {
+                    console.error('Warning: Failed to delete from cloud:', cloudError.message);
+                }
+            }
+
+            // Delete local file if exists
+            if (report.filePath && fs.existsSync(report.filePath)) {
+                fs.unlinkSync(report.filePath);
+            }
+
+            // Delete the report
+            await MedicalReport.findByIdAndDelete(reportId);
+
+            res.json({
+                success: true,
+                message: 'Report and associated lab results deleted successfully'
+            });
+
+        } catch (error) {
+            next(error);
+        }
+    }
+);
+
 export default router;
