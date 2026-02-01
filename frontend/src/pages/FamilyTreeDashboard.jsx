@@ -7,12 +7,14 @@ import GlassCard from '../components/ui/GlassCard';
 import Button from '../components/ui/Button';
 import AddMemberModal from '../components/family/AddMemberModal';
 import FamilyTreeVisualization from '../components/family/FamilyTreeVisualization';
+import FamilyHealthSummary from '../components/family/FamilyHealthSummary';
 
 const FamilyTreeDashboard = () => {
     const { user, logout } = useAuth();
     const { members, admin, setMembers, setAdmin, addMember } = useFamilyStore();
     const [loading, setLoading] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
+    const [showHealthSummary, setShowHealthSummary] = useState(false);
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -60,9 +62,17 @@ const FamilyTreeDashboard = () => {
                         </h1>
                         <p className="text-charcoal/70 mt-2">Welcome back, {user?.name}</p>
                     </div>
-                    <Button variant="ghost" onClick={handleLogout}>
-                        Logout
-                    </Button>
+                    <div className="flex items-center gap-3">
+                        <Button
+                            onClick={() => setShowHealthSummary(true)}
+                            className="bg-gold hover:bg-gold/90 text-white font-medium shadow-md"
+                        >
+                            📊 Health Summary
+                        </Button>
+                        <Button variant="ghost" onClick={handleLogout}>
+                            Logout
+                        </Button>
+                    </div>
                 </div>
             </div>
 
@@ -103,6 +113,11 @@ const FamilyTreeDashboard = () => {
                 onClose={() => setIsModalOpen(false)}
                 onMemberAdded={handleMemberAdded}
             />
+
+            {/* Health Summary Modal */}
+            {showHealthSummary && (
+                <FamilyHealthSummary onClose={() => setShowHealthSummary(false)} />
+            )}
         </div>
     );
 };

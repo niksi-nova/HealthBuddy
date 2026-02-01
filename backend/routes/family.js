@@ -4,6 +4,10 @@ import FamilyMember from '../models/FamilyMember.js';
 import MedicalReport from '../models/MedicalReport.js';
 import LabResult from '../models/LabResult.js';
 import { protect } from '../middleware/auth.js';
+import {
+    calculateHealthScore,
+    getReportHealthStatus
+} from '../utils/healthAnalysis.js';
 import upload from '../middleware/upload.js';
 
 const router = express.Router();
@@ -253,5 +257,116 @@ router.delete('/members/:id',
         }
     }
 );
+
+/**
+ * @route   GET /api/family/health-summary
+ * @desc    Get health summary for all family members
+ * @access  Private
+ */
+router.get('/health-summary', protect, async (req, res, next) => {
+    try {
+        // Get all family members
+        const members = await FamilyMember.find({ userId: req.user._id }).lean();
+
+        // Include admin in the summary
+        const adminData = {
+            _id: req.user._id,
+            name: req.user.name,
+            age: req.user.age,
+            gender: req.user.gender,
+            avatarColor: req.user.avatarColor,
+            relation: 'Admin',
+            isAdmin: true
+        };
+
+        const allMembers = [adminData, ...members];
+        const memberHealthData = [];
+        let totalHealthScore = 0;
+        let membersWithData = 0;
+
+        for (const member of allMembers) {
+            // Get the most recent report for this member
+            const latestReport = await MedicalReport.findOne({
+                memberId: member._id.toString()
+            })
+                .sort({ reportDate: -1 })
+                .lean();
+
+            let healthScore = null;
+            let status = 'no_data';
+            let abnormalCount = 0;
+            let markerCount = 0;
+            let lastReportDate = null;
+
+            if (latestReport) {
+                // Get lab results for the latest report
+                const labResults = await LabResult.find({
+                    reportId: latestReport._id
+                }).lean();
+
+                if (labResults.length > 0) {
+                    healthScore = calculateHealthScore(labResults);
+                    status = getReportHealthStatus(healthScore);
+                    abnormalCount = labResults.filter(r => r.isAbnormal).length;
+                    markerCount = labResults.length;
+                    lastReportDate = latestReport.reportDate;
+                    totalHealthScore += healthScore;
+                    membersWithData++;
+                }
+            }
+
+            memberHealthData.push({
+                memberId: member._id,
+                name: member.name,
+                age: member.age,
+                gender: member.gender,
+                relation: member.relation,
+                avatarColor: member.avatarColor,
+                profilePicture: member.profilePicture,
+                isAdmin: member.isAdmin || false,
+                healthScore,
+                status,
+                abnormalCount,
+                markerCount,
+                lastReportDate
+            });
+        }
+
+        // Calculate overall family health score
+        const overallHealthScore = membersWithData > 0
+            ? Math.round(totalHealthScore / membersWithData)
+            : null;
+
+        // Categorize members
+        const membersNeedingAttention = memberHealthData.filter(
+            m => m.status === 'attention' || m.status === 'warning'
+        );
+        const healthyMembers = memberHealthData.filter(
+            m => m.status === 'normal'
+        );
+        const membersWithoutData = memberHealthData.filter(
+            m => m.status === 'no_data'
+        );
+
+        res.json({
+            success: true,
+            overallHealthScore,
+            overallStatus: overallHealthScore
+                ? getReportHealthStatus(overallHealthScore)
+                : 'no_data',
+            totalMembers: allMembers.length,
+            membersWithData,
+            memberHealthData,
+            summary: {
+                needingAttention: membersNeedingAttention.length,
+                healthy: healthyMembers.length,
+                noData: membersWithoutData.length
+            }
+        });
+
+    } catch (error) {
+        next(error);
+    }
+});
 
 export default router;
