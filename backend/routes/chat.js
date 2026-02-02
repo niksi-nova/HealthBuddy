@@ -4,6 +4,7 @@ import FamilyMember from '../models/FamilyMember.js';
 import LabResult from '../models/LabResult.js';
 import { protect } from '../middleware/auth.js';
 import geminiService from '../services/geminiService.js';
+import { getReferenceRange, isAbnormal as checkIsAbnormal, formatReferenceRange } from '../utils/referenceRanges.js';
 
 const router = express.Router();
 
@@ -241,15 +242,20 @@ router.post(
             /* Build context for AI          */
             /* ----------------------------- */
 
-            // Format lab results for context
+            // Get member gender for reference ranges
+            const memberGender = member.gender || 'Female';
+
+            // Format lab results for context with proper reference ranges
             const formatLabResults = (results) => {
                 return results.map(r => {
                     const date = new Date(r.testDate).toLocaleDateString('en-IN', {
                         day: 'numeric', month: 'short', year: 'numeric'
                     });
-                    const abnormalFlag = r.isAbnormal ? ' ⚠️ OUT OF RANGE' : ' ✓ Normal';
-                    const refRange = r.referenceRange ? ` (Ref: ${r.referenceRange})` : '';
-                    return `${date} - ${r.marker}: ${r.value} ${r.unit || ''}${refRange}${abnormalFlag}`;
+                    // Get standard reference range based on gender
+                    const refRangeStr = formatReferenceRange(r.marker, memberGender);
+                    const abnormal = checkIsAbnormal(r.marker, r.value, memberGender);
+                    const abnormalFlag = abnormal ? ' ⚠️ OUT OF RANGE' : ' ✓ Normal';
+                    return `${date} - ${r.marker}: ${r.value} ${r.unit || ''} (Normal: ${refRangeStr})${abnormalFlag}`;
                 }).join('\n');
             };
 

@@ -20,6 +20,7 @@ import {
     getTopChanges,
     getChangeDescription
 } from '../utils/healthAnalysis.js';
+import { getReferenceRange, isAbnormal as checkIsAbnormal } from '../utils/referenceRanges.js';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
@@ -143,9 +144,16 @@ router.post('/upload/:memberId',
 
                 const { markers } = extractionResponse.data;
 
-                // Store lab results in MongoDB
+                // Get member's gender for gender-specific reference ranges
+                const memberGender = member.gender || 'Female';
+
+                // Store lab results in MongoDB with reference ranges
                 const labResults = [];
                 for (const marker of markers) {
+                    // Get gender-specific reference range
+                    const refRange = getReferenceRange(marker.name, memberGender);
+                    const abnormal = checkIsAbnormal(marker.name, marker.value, memberGender);
+
                     const labResult = await LabResult.create({
                         userId: req.user._id,
                         memberId: memberId,
@@ -153,7 +161,9 @@ router.post('/upload/:memberId',
                         marker: marker.name,
                         value: marker.value,
                         unit: marker.unit,
-                        testDate: new Date(reportDate)
+                        testDate: new Date(reportDate),
+                        referenceRange: refRange ? { min: refRange.min, max: refRange.max } : { min: null, max: null },
+                        isAbnormal: abnormal
                     });
                     labResults.push(labResult);
                 }
@@ -402,6 +412,7 @@ router.get('/trends/:memberId/:marker',
                     _id: req.user._id,
                     userId: req.user._id,
                     name: req.user.name || 'Admin',
+                    gender: req.user.gender || 'Female',
                     isAdmin: true
                 };
             }
@@ -413,6 +424,8 @@ router.get('/trends/:memberId/:marker',
                 });
             }
 
+            const memberGender = member.gender || 'Female';
+
             // Handle special case for "all" markers
             if (marker === 'all') {
                 const allResults = await LabResult.find({ memberId })
@@ -420,19 +433,43 @@ router.get('/trends/:memberId/:marker',
                     .limit(100)
                     .lean();
 
+                // Add reference ranges to each result
+                const resultsWithRanges = allResults.map(result => {
+                    const refRange = getReferenceRange(result.marker, memberGender);
+                    return {
+                        ...result,
+                        referenceRange: refRange ? { min: refRange.min, max: refRange.max } : result.referenceRange,
+                        isAbnormal: refRange ? checkIsAbnormal(result.marker, result.value, memberGender) : result.isAbnormal
+                    };
+                });
+
                 return res.json({
                     success: true,
-                    results: allResults
+                    results: resultsWithRanges
                 });
             }
 
             const trend = await LabResult.getTrend(memberId, marker, limit);
 
+            // Add reference range to each data point
+            const trendWithRanges = trend.map(point => {
+                const refRange = getReferenceRange(marker, memberGender);
+                return {
+                    ...point,
+                    referenceRange: refRange ? { min: refRange.min, max: refRange.max } : point.referenceRange,
+                    isAbnormal: refRange ? checkIsAbnormal(marker, point.value, memberGender) : point.isAbnormal
+                };
+            });
+
+            // Get the reference range for this marker (for the response)
+            const refRange = getReferenceRange(marker, memberGender);
+
             res.json({
                 success: true,
                 marker,
-                count: trend.length,
-                data: trend
+                count: trendWithRanges.length,
+                data: trendWithRanges,
+                referenceRange: refRange ? { min: refRange.min, max: refRange.max } : null
             });
 
         } catch (error) {

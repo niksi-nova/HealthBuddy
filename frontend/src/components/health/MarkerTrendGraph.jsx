@@ -135,6 +135,37 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
             }
         };
 
+        // Get point color based on severity (red/yellow/green)
+        const getPointColor = (point) => {
+            if (!point.referenceRange || point.referenceRange.min === null || point.referenceRange.max === null) {
+                return '#8B9D83'; // Sage (default, unknown state)
+            }
+
+            const { value } = point;
+            const { min, max } = point.referenceRange;
+
+            // Normal - Green/Sage
+            if (value >= min && value <= max) {
+                return '#8B9D83';
+            }
+
+            // Calculate severity
+            let percentDeviation;
+            if (value < min) {
+                percentDeviation = ((min - value) / min) * 100;
+            } else {
+                percentDeviation = ((value - max) / max) * 100;
+            }
+
+            // Significantly abnormal (>20% deviation) - Red
+            if (percentDeviation > 20) {
+                return '#E53E3E';
+            }
+
+            // Slightly abnormal - Yellow/Orange
+            return '#EAB308';
+        };
+
         return (
             <div className="relative">
                 {/* Graph container with horizontal scroll on very small screens */}
@@ -190,7 +221,7 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
                                     cx={xScale(index)}
                                     cy={yScale(point.value)}
                                     r={hoveredPoint === index ? 8 : 6}
-                                    fill={point.isAbnormal ? '#E53E3E' : '#8B9D83'}
+                                    fill={getPointColor(point)}
                                     stroke="white"
                                     strokeWidth="2"
                                     className="cursor-pointer transition-all duration-200"
