@@ -239,11 +239,22 @@ router.get('/reports/:memberId',
         try {
             const { memberId } = req.params;
 
-            // SECURITY: Verify member belongs to user
-            const member = await FamilyMember.findOne({
+            // SECURITY: Verify member belongs to user OR is the user themselves
+            let member = await FamilyMember.findOne({
                 _id: memberId,
                 userId: req.user._id
             });
+
+            // If not found as family member, check if memberId is the user's own ID
+            if (!member && memberId === req.user._id.toString()) {
+                // Admin access for themselves - create a virtual member object
+                member = {
+                    _id: req.user._id,
+                    userId: req.user._id,
+                    name: req.user.name || 'Admin',
+                    isAdmin: true
+                };
+            }
 
             if (!member) {
                 return res.status(403).json({
@@ -328,10 +339,20 @@ router.get('/markers/:memberId',
             const { memberId } = req.params;
 
             // SECURITY: Verify access
-            const member = await FamilyMember.findOne({
+            let member = await FamilyMember.findOne({
                 _id: memberId,
                 userId: req.user._id
             });
+
+            // If not found as family member, check if memberId is the user's own ID
+            if (!member && memberId === req.user._id.toString()) {
+                member = {
+                    _id: req.user._id,
+                    userId: req.user._id,
+                    name: req.user.name || 'Admin',
+                    isAdmin: true
+                };
+            }
 
             if (!member) {
                 return res.status(403).json({
@@ -370,10 +391,20 @@ router.get('/trends/:memberId/:marker',
             const limit = parseInt(req.query.limit) || 10;
 
             // SECURITY: Verify access
-            const member = await FamilyMember.findOne({
+            let member = await FamilyMember.findOne({
                 _id: memberId,
                 userId: req.user._id
             });
+
+            // If not found as family member, check if memberId is the user's own ID
+            if (!member && memberId === req.user._id.toString()) {
+                member = {
+                    _id: req.user._id,
+                    userId: req.user._id,
+                    name: req.user.name || 'Admin',
+                    isAdmin: true
+                };
+            }
 
             if (!member) {
                 return res.status(403).json({
@@ -423,10 +454,22 @@ router.get('/health-overview/:memberId',
             const { memberId } = req.params;
 
             // SECURITY: Verify access
-            const member = await FamilyMember.findOne({
+            let member = await FamilyMember.findOne({
                 _id: memberId,
                 userId: req.user._id
             });
+
+            // If not found as family member, check if memberId is the user's own ID
+            if (!member && memberId === req.user._id.toString()) {
+                member = {
+                    _id: req.user._id,
+                    userId: req.user._id,
+                    name: req.user.name || 'Admin',
+                    isAdmin: true,
+                    age: req.user.age,
+                    gender: req.user.gender
+                };
+            }
 
             if (!member) {
                 return res.status(403).json({

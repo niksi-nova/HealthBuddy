@@ -53,6 +53,14 @@ const userSchema = new mongoose.Schema({
             const colors = ['#8B9D83', '#D4A59A', '#E8B44F', '#A8C5DD', '#E6B8AF'];
             return colors[Math.floor(Math.random() * colors.length)];
         }
+    },
+    profilePicture: {
+        type: String,
+        default: ''
+    },
+    existingConditions: {
+        type: [String],
+        default: []
     }
 }, {
     timestamps: true // Adds createdAt and updatedAt

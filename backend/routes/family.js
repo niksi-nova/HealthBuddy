@@ -3,6 +3,7 @@ import { body, param, validationResult } from 'express-validator';
 import FamilyMember from '../models/FamilyMember.js';
 import MedicalReport from '../models/MedicalReport.js';
 import LabResult from '../models/LabResult.js';
+import User from '../models/User.js';
 import { protect } from '../middleware/auth.js';
 import {
     calculateHealthScore,
@@ -133,8 +134,33 @@ router.get('/members/:id',
                 });
             }
 
+            const { id } = req.params;
+
+            // Check if requesting own profile (Admin)
+            if (id === req.user._id.toString()) {
+                const user = await User.findById(req.user._id);
+
+                // Format user as member
+                const adminMember = {
+                    _id: user._id,
+                    name: user.name,
+                    age: user.age,
+                    gender: user.gender,
+                    relation: 'Admin',
+                    isAdmin: true,
+                    avatarColor: user.avatarColor,
+                    profilePicture: user.profilePicture,
+                    existingConditions: user.existingConditions || []
+                };
+
+                return res.status(200).json({
+                    success: true,
+                    member: adminMember
+                });
+            }
+
             const member = await FamilyMember.findOne({
-                _id: req.params.id,
+                _id: id,
                 userId: req.user._id
             });
 
@@ -162,13 +188,14 @@ router.get('/members/:id',
  */
 router.put('/members/:id',
     protect,
+    upload.single('profilePicture'),
     [
         param('id').isMongoId().withMessage('Invalid member ID'),
         body('name').optional().trim().isLength({ min: 2, max: 100 }),
         body('relation').optional().trim().notEmpty(),
         body('age').optional().isInt({ min: 0, max: 120 }),
         body('gender').optional().isIn(['Male', 'Female', 'Other']),
-        body('existingConditions').optional().isArray()
+        body('existingConditions').optional()
     ],
     async (req, res, next) => {
         try {
@@ -181,9 +208,59 @@ router.put('/members/:id',
                 });
             }
 
+            const { id } = req.params;
+            const updates = { ...req.body };
+
+            // Parse existingConditions if it's a string
+            if (updates.existingConditions && typeof updates.existingConditions === 'string') {
+                try {
+                    updates.existingConditions = JSON.parse(updates.existingConditions);
+                } catch (e) {
+                    updates.existingConditions = [];
+                }
+            }
+
+            // Add profile picture if uploaded
+            if (req.file) {
+                updates.profilePicture = `/uploads/${req.file.filename}`;
+            }
+
+            // Check if updating own profile (Admin)
+            if (id === req.user._id.toString()) {
+                // Remove fields that shouldn't be updated via this endpoint or don't exist on User
+                delete updates.relation; // Admin always has 'Admin' relation
+                delete updates.userId;
+
+                const user = await User.findByIdAndUpdate(
+                    req.user._id,
+                    updates,
+                    { new: true, runValidators: true }
+                );
+
+                // Format as member for response
+                const adminMember = {
+                    _id: user._id,
+                    name: user.name,
+                    age: user.age,
+                    gender: user.gender,
+                    relation: 'Admin',
+                    isAdmin: true,
+                    avatarColor: user.avatarColor,
+                    profilePicture: user.profilePicture,
+                    existingConditions: user.existingConditions || []
+                };
+
+                return res.status(200).json({
+                    success: true,
+                    message: 'Profile updated successfully',
+                    member: adminMember
+                });
+            }
+
+            // Update Family Member
             const member = await FamilyMember.findOneAndUpdate(
-                { _id: req.params.id, userId: req.user._id },
-                req.body,
+                { _id: id, userId: req.user._id },
+                updates,
                 { new: true, runValidators: true }
             );
 
