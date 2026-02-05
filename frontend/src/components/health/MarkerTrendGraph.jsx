@@ -64,12 +64,12 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
         // Calculate graph dimensions and scales - optimized for mobile
         const width = 800;
         const height = 280;
-        const padding = { top: 20, right: 16, bottom: 40, left: 50 };
+        const padding = { top: 20, right: 30, bottom: 40, left: 60 }; // Increased padding
         const graphWidth = width - padding.left - padding.right;
         const graphHeight = height - padding.top - padding.bottom;
 
         // Get min and max values
-        const values = trendData.map(d => d.value);
+        const values = trendData.map(d => Number(d.value)); // Ensure numbers
         const minValue = Math.min(...values);
         const maxValue = Math.max(...values);
 
@@ -80,25 +80,42 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
             d.referenceRange.max !== null
         );
 
+        // --- FIX: Robust Y-Axis Range Calculation ---
         let yMin, yMax;
+        let dataMin = minValue;
+        let dataMax = maxValue;
+
         if (hasReferenceRange) {
-            const refMin = trendData[0].referenceRange?.min || minValue;
-            const refMax = trendData[0].referenceRange?.max || maxValue;
-            yMin = Math.min(minValue, refMin) * 0.9;
-            yMax = Math.max(maxValue, refMax) * 1.1;
-        } else {
-            yMin = minValue * 0.9;
-            yMax = maxValue * 1.1;
+            const refMin = trendData[0].referenceRange?.min ?? minValue;
+            const refMax = trendData[0].referenceRange?.max ?? maxValue;
+            dataMin = Math.min(minValue, refMin);
+            dataMax = Math.max(maxValue, refMax);
         }
 
-        // Scale functions
-        const xScale = (index) => padding.left + (index / (trendData.length - 1)) * graphWidth;
-        const yScale = (value) => padding.top + graphHeight - ((value - yMin) / (yMax - yMin)) * graphHeight;
+        // Calculate range padding (margin)
+        const rangeSpan = dataMax - dataMin;
+        // If flat line (rangeSpan 0), add arbitrary buffer. Otherwise add 10% padding.
+        const margin = rangeSpan === 0 ? (Math.abs(dataMin) * 0.1 || 10) : rangeSpan * 0.1;
+
+        yMin = dataMin - margin;
+        yMax = dataMax + margin;
+
+        // --- FIX: Handle Single Data Point (Prevent Divide by Zero) ---
+        const xScale = (index) => {
+            if (trendData.length === 1) return padding.left + (graphWidth / 2); // Center if only 1 point
+            return padding.left + (index / (trendData.length - 1)) * graphWidth;
+        };
+
+        const yScale = (value) => {
+            // Handle case where yMax equals yMin (rare, but possible if margin logic fails)
+            if (yMax === yMin) return padding.top + (graphHeight / 2);
+            return padding.top + graphHeight - ((value - yMin) / (yMax - yMin)) * graphHeight;
+        }
 
         // Generate path for line chart
-        const linePath = trendData
-            .map((d, i) => `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${yScale(d.value)}`)
-            .join(' ');
+        const linePath = trendData.length > 1
+            ? trendData.map((d, i) => `${i === 0 ? 'M' : 'L'} ${xScale(i)} ${yScale(d.value)}`).join(' ')
+            : ''; // No line if only one point
 
         // Generate reference range shading
         let referenceRangePath = '';
@@ -133,37 +150,6 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
                 const percentAbove = ((value - max) / max) * 100;
                 return percentAbove > 20 ? 'Significantly High' : 'Slightly High';
             }
-        };
-
-        // Get point color based on severity (red/yellow/green)
-        const getPointColor = (point) => {
-            if (!point.referenceRange || point.referenceRange.min === null || point.referenceRange.max === null) {
-                return '#8B9D83'; // Sage (default, unknown state)
-            }
-
-            const { value } = point;
-            const { min, max } = point.referenceRange;
-
-            // Normal - Green/Sage
-            if (value >= min && value <= max) {
-                return '#8B9D83';
-            }
-
-            // Calculate severity
-            let percentDeviation;
-            if (value < min) {
-                percentDeviation = ((min - value) / min) * 100;
-            } else {
-                percentDeviation = ((value - max) / max) * 100;
-            }
-
-            // Significantly abnormal (>20% deviation) - Red
-            if (percentDeviation > 20) {
-                return '#E53E3E';
-            }
-
-            // Slightly abnormal - Yellow/Orange
-            return '#EAB308';
         };
 
         return (
@@ -205,14 +191,16 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
                         />
 
                         {/* Line chart */}
-                        <path
-                            d={linePath}
-                            fill="none"
-                            stroke="#8B9D83"
-                            strokeWidth="3"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                        />
+                        {trendData.length > 1 && (
+                            <path
+                                d={linePath}
+                                fill="none"
+                                stroke="#8B9D83"
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                            />
+                        )}
 
                         {/* Data points */}
                         {trendData.map((point, index) => (
@@ -221,7 +209,7 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
                                     cx={xScale(index)}
                                     cy={yScale(point.value)}
                                     r={hoveredPoint === index ? 8 : 6}
-                                    fill={getPointColor(point)}
+                                    fill={point.isAbnormal ? '#E53E3E' : '#8B9D83'}
                                     stroke="white"
                                     strokeWidth="2"
                                     className="cursor-pointer transition-all duration-200"
@@ -231,18 +219,23 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
                             </g>
                         ))}
 
-                        {/* X-axis labels (dates) - show fewer on mobile */}
+                        {/* X-axis labels (dates) */}
                         {trendData.map((point, index) => {
-                            // On mobile, show fewer labels to prevent overlap
                             const showLabel = trendData.length <= 5 || index % Math.ceil(trendData.length / 4) === 0 || index === trendData.length - 1;
                             if (!showLabel) return null;
+
+                            // FIX: Prevent text clipping for first/last labels
+                            let textAnchor = "middle";
+                            if (index === 0 && trendData.length > 1) textAnchor = "start";
+                            if (index === trendData.length - 1 && trendData.length > 1) textAnchor = "end";
+
                             return (
                                 <text
                                     key={index}
                                     x={xScale(index)}
                                     y={height - padding.bottom + 18}
-                                    textAnchor="middle"
-                                    fontSize="9"
+                                    textAnchor={textAnchor}
+                                    fontSize="10"
                                     fill="#4A5568"
                                 >
                                     {new Date(point.testDate).toLocaleDateString('en-US', {
@@ -255,31 +248,33 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
 
                         {/* Y-axis labels */}
                         <text
-                            x={padding.left - 6}
+                            x={padding.left - 8}
                             y={yScale(yMax)}
                             textAnchor="end"
-                            fontSize="9"
+                            fontSize="10"
                             fill="#4A5568"
+                            dominantBaseline="middle"
                         >
                             {yMax.toFixed(1)}
                         </text>
                         <text
-                            x={padding.left - 6}
+                            x={padding.left - 8}
                             y={yScale(yMin)}
                             textAnchor="end"
-                            fontSize="9"
+                            fontSize="10"
                             fill="#4A5568"
+                            dominantBaseline="middle"
                         >
                             {yMin.toFixed(1)}
                         </text>
                     </svg>
                 </div>
 
-                {/* Tooltip - positioned at top, responsive sizing */}
+                {/* Tooltip */}
                 {hoveredPoint !== null && (
                     <div className="absolute top-0 left-2 right-2 md:left-1/2 md:right-auto md:transform md:-translate-x-1/2 
                         bg-white/95 backdrop-blur-sm px-3 py-2 md:px-4 md:py-3 rounded-lg shadow-lg border border-sage/20
-                        animate-fadeIn z-10">
+                        animate-fadeIn z-10 pointer-events-none">
                         <div className="text-sm font-semibold text-charcoal mb-1">
                             {trendData[hoveredPoint].value} {trendData[hoveredPoint].unit}
                         </div>
@@ -302,7 +297,7 @@ const MarkerTrendGraph = ({ memberId, defaultMarker, availableMarkers }) => {
 
     return (
         <div>
-            {/* Marker Selector - stacks on mobile */}
+            {/* Marker Selector */}
             <div className="mb-4 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
                 <label htmlFor="marker-select" className="text-sm font-medium text-charcoal">
                     View trend for:
